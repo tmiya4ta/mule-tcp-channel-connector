@@ -1,6 +1,5 @@
 package io.github.tmiya4ta.tcpchannel.internal.source;
 
-import io.github.tmiya4ta.tcpchannel.api.Framing;
 import io.github.tmiya4ta.tcpchannel.api.TcpChannelAttributes;
 import io.github.tmiya4ta.tcpchannel.internal.connection.TcpChannelServer;
 import io.github.tmiya4ta.tcpchannel.internal.framing.FrameCodec;
@@ -31,16 +30,18 @@ import java.net.SocketException;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Listens for TCP connections and dispatches each framed message to the flow.
  * Connections are kept open across messages until the client closes the socket
- * or an unrecoverable IO error occurs. Framing is determined by the connection
- * provider (LINE / LENGTH_PREFIX).
+ * or an unrecoverable IO error occurs. Framing, line delimiter, max frame
+ * size, SO_KEEPALIVE and the maximum number of concurrent connections are all
+ * configured on the {@link TcpChannelServer}.
  *
- * Each accepted Socket is registered in the shared {@link TcpChannelServer}
- * so that operations (write / disconnect) can address the same socket by id.
+ * Each accepted Socket is registered in the shared server so that operations
+ * (write / disconnect) can address the same socket by connectionId.
  */
 @Alias("listener")
 @EmitsResponse
@@ -55,6 +56,7 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
     private TcpChannelServer server;
     private ExecutorService acceptor;
     private ExecutorService workers;
+    private Semaphore connectionPermits;
     private volatile boolean running;
     private SourceCallback<byte[], TcpChannelAttributes> sourceCallback;
 
@@ -63,6 +65,7 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
         this.sourceCallback = callback;
         this.server = connectionProvider.connect();
         this.running = true;
+        this.connectionPermits = new Semaphore(server.getMaxConnections());
         this.acceptor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "tcpc-acceptor-" + server.getPort());
             t.setDaemon(true);
@@ -74,8 +77,10 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
             return t;
         });
         acceptor.submit(this::acceptLoop);
-        LOGGER.info("[tcpc] listener started on {}:{} framing={}",
-                server.getHost(), server.getPort(), server.getFraming());
+        LOGGER.info("[tcpc] listener started on {}:{} framing={} delim={} maxFrame={} keepAlive={} maxConns={}",
+                server.getHost(), server.getPort(), server.getFraming(),
+                server.getLineDelimiter(), server.getMaxFrameLength(),
+                server.isKeepAlive(), server.getMaxConnections());
     }
 
     @Override
@@ -95,28 +100,57 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
 
     private void acceptLoop() {
         while (running && server.isOpen()) {
+            Socket socket;
             try {
-                Socket socket = server.getServerSocket().accept();
-                String connId = UUID.randomUUID().toString();
-                server.registerConnection(connId, socket);
-                LOGGER.info("[tcpc] accepted connId={} remote={}", connId, socket.getRemoteSocketAddress());
-                workers.submit(() -> readLoop(connId, socket));
+                socket = server.getServerSocket().accept();
             } catch (SocketException e) {
                 if (running) LOGGER.warn("[tcpc] accept failed: {}", e.getMessage());
                 else break;
+                continue;
             } catch (IOException e) {
                 LOGGER.warn("[tcpc] accept IO error: {}", e.getMessage());
+                continue;
             }
+
+            // Reject when at the configured connection limit.
+            if (!connectionPermits.tryAcquire()) {
+                LOGGER.warn("[tcpc] connection limit ({}) reached; rejecting {} (active={})",
+                        server.getMaxConnections(), socket.getRemoteSocketAddress(),
+                        server.activeConnectionCount());
+                try { socket.close(); } catch (IOException ignored) {}
+                continue;
+            }
+
+            try {
+                if (server.isKeepAlive()) {
+                    socket.setKeepAlive(true);
+                }
+            } catch (SocketException e) {
+                LOGGER.warn("[tcpc] failed to set SO_KEEPALIVE: {}", e.getMessage());
+            }
+
+            String connId = UUID.randomUUID().toString();
+            server.registerConnection(connId, socket);
+            LOGGER.info("[tcpc] accepted connId={} remote={} active={}/{}",
+                    connId, socket.getRemoteSocketAddress(),
+                    server.activeConnectionCount(), server.getMaxConnections());
+            workers.submit(() -> {
+                try {
+                    readLoop(connId, socket);
+                } finally {
+                    connectionPermits.release();
+                }
+            });
         }
     }
 
     private void readLoop(String connId, Socket socket) {
         AtomicLong msgIndex = new AtomicLong(0);
         String remote = String.valueOf(socket.getRemoteSocketAddress());
-        Framing framing = server.getFraming();
         try (InputStream in = new BufferedInputStream(socket.getInputStream())) {
             while (running) {
-                byte[] payload = FrameCodec.readFrame(in, framing);
+                byte[] payload = FrameCodec.readFrame(in, server.getFraming(),
+                        server.getLineDelimiter(), server.getMaxFrameLength());
                 if (payload == null) {
                     break;
                 }
@@ -155,7 +189,7 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
         try {
             byte[] body = (response == null) ? new byte[0] : response.readAllBytes();
             OutputStream out = socket.getOutputStream();
-            FrameCodec.writeFrame(out, server.getFraming(), body);
+            FrameCodec.writeFrame(out, server.getFraming(), server.getLineDelimiter(), body);
             out.flush();
         } catch (IOException e) {
             LOGGER.warn("[tcpc] onSuccess write failed connId={}: {}", connId, e.getMessage());

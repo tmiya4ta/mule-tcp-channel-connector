@@ -1,6 +1,7 @@
 package io.github.tmiya4ta.tcpchannel.internal.framing;
 
 import io.github.tmiya4ta.tcpchannel.api.Framing;
+import io.github.tmiya4ta.tcpchannel.api.LineDelimiter;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -11,40 +12,42 @@ import java.io.OutputStream;
 /**
  * Encodes and decodes wire frames for both LINE and LENGTH_PREFIX framings.
  *
- * <p>LINE: a frame is the bytes up to and including the next '\n'; the returned
- * payload has the trailing '\n' stripped (and '\r' if present, to be CRLF-tolerant).
+ * <p>LINE: a frame is the bytes up to (and excluding) the configured
+ * {@link LineDelimiter}. LF is CRLF-tolerant on input (a preceding '\r' is
+ * stripped). CRLF requires the exact two-byte sequence on input. NUL uses a
+ * single 0x00 byte. On output the terminator is appended if the payload does
+ * not already end with it.
  *
  * <p>LENGTH_PREFIX: a frame is a 4-byte big-endian unsigned-int length followed
  * by exactly that many payload bytes. Length 0 is a valid empty payload.
  *
  * <p>{@link #readFrame} returns {@code null} on clean EOF (peer closed write
  * side between frames). A partial frame (EOF mid-frame) raises an
+ * {@link IOException}. Frames larger than {@code maxFrameLength} also raise
  * {@link IOException}.
  */
 public final class FrameCodec {
 
-    private static final int MAX_LENGTH = 64 * 1024 * 1024; // 64 MiB safety cap
-
     private FrameCodec() {}
 
-    public static byte[] readFrame(InputStream in, Framing framing) throws IOException {
+    public static byte[] readFrame(InputStream in, Framing framing,
+                                   LineDelimiter lineDelimiter, int maxFrameLength)
+            throws IOException {
         switch (framing) {
             case LINE:
-                return readLine(in);
+                return readLine(in, lineDelimiter, maxFrameLength);
             case LENGTH_PREFIX:
-                return readLengthPrefixed(in);
+                return readLengthPrefixed(in, maxFrameLength);
             default:
                 throw new IllegalStateException("Unknown framing: " + framing);
         }
     }
 
-    public static void writeFrame(OutputStream out, Framing framing, byte[] payload) throws IOException {
+    public static void writeFrame(OutputStream out, Framing framing,
+                                  LineDelimiter lineDelimiter, byte[] payload) throws IOException {
         switch (framing) {
             case LINE:
-                out.write(payload);
-                if (payload.length == 0 || payload[payload.length - 1] != (byte) '\n') {
-                    out.write('\n');
-                }
+                writeLine(out, lineDelimiter, payload);
                 return;
             case LENGTH_PREFIX:
                 writeIntBE(out, payload.length);
@@ -55,29 +58,96 @@ public final class FrameCodec {
         }
     }
 
-    private static byte[] readLine(InputStream in) throws IOException {
+    private static byte[] readLine(InputStream in, LineDelimiter delim, int maxLen) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        int b;
-        while ((b = in.read()) != -1) {
-            if (b == '\n') {
-                int n = buf.size();
-                byte[] arr = buf.toByteArray();
-                if (n > 0 && arr[n - 1] == '\r') {
-                    byte[] trimmed = new byte[n - 1];
-                    System.arraycopy(arr, 0, trimmed, 0, n - 1);
-                    return trimmed;
+        switch (delim) {
+            case LF: {
+                int b;
+                while ((b = in.read()) != -1) {
+                    if (b == '\n') {
+                        return finalizeLfFrame(buf);
+                    }
+                    if (buf.size() >= maxLen) {
+                        throw new IOException("Frame exceeds maxFrameLength=" + maxLen);
+                    }
+                    buf.write(b);
                 }
-                return arr;
+                if (buf.size() == 0) return null;
+                return buf.toByteArray();
             }
-            buf.write(b);
+            case CRLF: {
+                int prev = -1, b;
+                while ((b = in.read()) != -1) {
+                    if (prev == '\r' && b == '\n') {
+                        byte[] arr = buf.toByteArray();
+                        byte[] trimmed = new byte[arr.length - 1];
+                        System.arraycopy(arr, 0, trimmed, 0, arr.length - 1);
+                        return trimmed;
+                    }
+                    if (buf.size() >= maxLen) {
+                        throw new IOException("Frame exceeds maxFrameLength=" + maxLen);
+                    }
+                    buf.write(b);
+                    prev = b;
+                }
+                if (buf.size() == 0) return null;
+                return buf.toByteArray();
+            }
+            case NUL: {
+                int b;
+                while ((b = in.read()) != -1) {
+                    if (b == 0) {
+                        return buf.toByteArray();
+                    }
+                    if (buf.size() >= maxLen) {
+                        throw new IOException("Frame exceeds maxFrameLength=" + maxLen);
+                    }
+                    buf.write(b);
+                }
+                if (buf.size() == 0) return null;
+                return buf.toByteArray();
+            }
+            default:
+                throw new IllegalStateException("Unknown lineDelimiter: " + delim);
         }
-        // EOF
-        if (buf.size() == 0) return null;
-        // Treat trailing data without terminator as a final frame
-        return buf.toByteArray();
     }
 
-    private static byte[] readLengthPrefixed(InputStream in) throws IOException {
+    private static byte[] finalizeLfFrame(ByteArrayOutputStream buf) {
+        byte[] arr = buf.toByteArray();
+        int n = arr.length;
+        if (n > 0 && arr[n - 1] == '\r') {
+            byte[] trimmed = new byte[n - 1];
+            System.arraycopy(arr, 0, trimmed, 0, n - 1);
+            return trimmed;
+        }
+        return arr;
+    }
+
+    private static void writeLine(OutputStream out, LineDelimiter delim, byte[] payload) throws IOException {
+        out.write(payload);
+        switch (delim) {
+            case LF:
+                if (payload.length == 0 || payload[payload.length - 1] != (byte) '\n') {
+                    out.write('\n');
+                }
+                return;
+            case CRLF:
+                if (payload.length < 2
+                        || payload[payload.length - 2] != (byte) '\r'
+                        || payload[payload.length - 1] != (byte) '\n') {
+                    out.write('\r');
+                    out.write('\n');
+                }
+                return;
+            case NUL:
+                if (payload.length == 0 || payload[payload.length - 1] != 0) {
+                    out.write(0);
+                }
+                return;
+        }
+    }
+
+    private static byte[] readLengthPrefixed(InputStream in, int maxLen) throws IOException {
         DataInputStream din = new DataInputStream(in);
         int len;
         try {
@@ -85,8 +155,8 @@ public final class FrameCodec {
         } catch (java.io.EOFException eof) {
             return null;
         }
-        if (len < 0 || len > MAX_LENGTH) {
-            throw new IOException("Frame length out of range: " + len);
+        if (len < 0 || len > maxLen) {
+            throw new IOException("Frame length out of range: " + len + " (max=" + maxLen + ")");
         }
         byte[] payload = new byte[len];
         din.readFully(payload);

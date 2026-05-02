@@ -86,6 +86,23 @@ http.port: "8282"
 
 Override at deploy time with `+tcp.line.port=...` etc.
 
+The LINE listener-config also explicitly sets the new connector parameters
+introduced for production hardening:
+
+```xml
+<tcpc:listener-config name="tcpc-line-config">
+    <tcpc:connection host="0.0.0.0" port="${tcp.line.port}" framing="LINE"
+                     lineDelimiter="LF"
+                     keepAlive="true"
+                     maxConnections="200"
+                     maxFrameLength="67108864"/>
+</tcpc:listener-config>
+```
+
+To experiment with the connection cap, drop `maxConnections` to e.g. `2`,
+redeploy, and open three sockets in parallel — the third gets closed
+immediately and the server logs `connection limit (2) reached; rejecting ...`.
+
 ## Notes
 
 * `/push` and `/close` use `<tcpc:last-connection-id/>` for convenience and

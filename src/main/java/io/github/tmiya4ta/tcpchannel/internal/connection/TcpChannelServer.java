@@ -1,6 +1,7 @@
 package io.github.tmiya4ta.tcpchannel.internal.connection;
 
 import io.github.tmiya4ta.tcpchannel.api.Framing;
+import io.github.tmiya4ta.tcpchannel.api.LineDelimiter;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -10,10 +11,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Holds the bound ServerSocket, the active framing strategy, and a registry of
- * accepted client sockets keyed by connectionId. Both the Source (which accepts
- * and registers) and Operations (which write/disconnect) share the same instance
- * via @Connection injection.
+ * Holds the bound ServerSocket plus all the connection-level settings shared
+ * between the source and the operations: framing, delimiter, max frame size,
+ * SO_KEEPALIVE, and the connection-id registry.
+ *
+ * Both the Source (which accepts and registers) and Operations (which write /
+ * disconnect) share the same instance via {@code @Connection} injection.
  */
 public class TcpChannelServer {
 
@@ -21,34 +24,36 @@ public class TcpChannelServer {
     private final String host;
     private final int port;
     private final Framing framing;
+    private final LineDelimiter lineDelimiter;
+    private final int maxFrameLength;
+    private final boolean keepAlive;
+    private final int maxConnections;
 
     private final ConcurrentHashMap<String, Socket> connections = new ConcurrentHashMap<>();
     private final AtomicReference<String> lastConnectionId = new AtomicReference<>();
 
-    public TcpChannelServer(String host, int port, Framing framing) throws IOException {
+    public TcpChannelServer(String host, int port, Framing framing, LineDelimiter lineDelimiter,
+                            int maxFrameLength, boolean keepAlive, int maxConnections) throws IOException {
         this.host = host;
         this.port = port;
         this.framing = framing;
+        this.lineDelimiter = lineDelimiter;
+        this.maxFrameLength = maxFrameLength;
+        this.keepAlive = keepAlive;
+        this.maxConnections = maxConnections;
         this.serverSocket = new ServerSocket();
         this.serverSocket.setReuseAddress(true);
         this.serverSocket.bind(new InetSocketAddress(host, port));
     }
 
-    public ServerSocket getServerSocket() {
-        return serverSocket;
-    }
-
-    public String getHost() {
-        return host;
-    }
-
-    public int getPort() {
-        return port;
-    }
-
-    public Framing getFraming() {
-        return framing;
-    }
+    public ServerSocket getServerSocket() { return serverSocket; }
+    public String getHost() { return host; }
+    public int getPort() { return port; }
+    public Framing getFraming() { return framing; }
+    public LineDelimiter getLineDelimiter() { return lineDelimiter; }
+    public int getMaxFrameLength() { return maxFrameLength; }
+    public boolean isKeepAlive() { return keepAlive; }
+    public int getMaxConnections() { return maxConnections; }
 
     public void registerConnection(String id, Socket socket) {
         connections.put(id, socket);
@@ -61,6 +66,10 @@ public class TcpChannelServer {
 
     public Socket getConnection(String id) {
         return connections.get(id);
+    }
+
+    public int activeConnectionCount() {
+        return connections.size();
     }
 
     public String getLastConnectionId() {

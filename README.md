@@ -70,11 +70,15 @@ xsi:schemaLocation="
 </tcpc:listener-config>
 ```
 
-| Attribute | Type    | Default   | Notes                                     |
-|-----------|---------|-----------|-------------------------------------------|
-| `host`    | String  | `0.0.0.0` | bind address                              |
-| `port`    | int     | (required)| TCP port                                  |
-| `framing` | enum    | `LINE`    | `LINE` or `LENGTH_PREFIX` (see below)     |
+| Attribute        | Type    | Default     | Notes                                                             |
+|------------------|---------|-------------|-------------------------------------------------------------------|
+| `host`           | String  | `0.0.0.0`   | bind address                                                      |
+| `port`           | int     | (required)  | TCP port                                                          |
+| `framing`        | enum    | `LINE`      | `LINE` or `LENGTH_PREFIX` (see below)                             |
+| `lineDelimiter`  | enum    | `LF`        | terminator for `LINE`: `LF`, `CRLF`, or `NUL`. Ignored otherwise. |
+| `maxFrameLength` | int     | `67108864`  | hard cap (bytes) per inbound frame; oversize frames close the conn|
+| `keepAlive`      | boolean | `true`      | sets `SO_KEEPALIVE` on every accepted socket                      |
+| `maxConnections` | int     | `200`       | concurrent connection cap; new accepts beyond it are closed       |
 
 ### Source: `<tcpc:listener>`
 
@@ -230,26 +234,20 @@ Read these before doing anything beyond a demo.
   handed off to the Mule flow with `sourceCallback.handle()`. If the flow
   cannot keep up, the socket's TCP receive buffer fills and the client stalls;
   there is no shed-load policy.
-* **Cached thread pool for workers.** A burst of N simultaneous clients
-  creates N threads. There is no upper bound, no idle-timeout tuning, and no
-  per-config isolation. Production deployments should constrain this.
 * **No TLS.** Plain TCP only; there is no `tlsContext` parameter. Add one
   by exposing a `javax.net.ssl.SSLContext` on the connection provider and
   swapping `ServerSocket` for `SSLServerSocket`.
 * **No reconnection / retry parameters.** If `bind()` fails the deployment
   fails.
-* **No keep-alive probe.** The server never speaks first; if a client goes
-  silent and its TCP connection half-dies (e.g. NAT timeout, hard power loss),
-  the corresponding socket stays in the registry until the OS closes it.
-  Set `SO_KEEPALIVE` or layer an application-level heartbeat if this matters.
+* **No application-level heartbeat.** `SO_KEEPALIVE` is enabled by default
+  (see `keepAlive` parameter), which lets the OS detect half-dead peers
+  — but only on the order of *hours* with stock Linux defaults. For
+  sub-minute liveness checks, layer an app-level ping/pong on top.
 * **`lastConnectionId` is single-client convenience only.** With multiple
   concurrent clients it returns whichever connected most recently and is
   a race. For multi-client routing, capture `attributes.connectionId` in the
   listener flow and persist it (ObjectStore, DB, broker) keyed by whatever
   identifies the client at the application layer.
-* **Message size cap is hard-coded.** `LENGTH_PREFIX` rejects frames > 64 MiB
-  via `IOException`. Adjust `FrameCodec.MAX_LENGTH` if you need different
-  bounds; do not remove it (a malicious client can otherwise OOM the worker).
 
 ### Lifecycle
 
@@ -270,9 +268,9 @@ Read these before doing anything beyond a demo.
 * **Single framing per config.** A given `<tcpc:listener-config>` runs one
   framing strategy for both directions and for all operations. To mix LINE
   and LENGTH_PREFIX in the same app, declare two configs on different ports.
-* **No custom delimiter for LINE.** Always `\n` (with optional preceding
-  `\r`). If you need `\r\n`-only or `\0`-delimited framing, extend the enum
-  and `FrameCodec`.
+* **LINE delimiter is one of `LF` / `CRLF` / `NUL`.** Custom byte sequences
+  (e.g. `0x1E`-record-separator) require extending `LineDelimiter` and
+  `FrameCodec`. Both peers must agree on the same delimiter.
 
 ### Testing / observability
 
@@ -295,6 +293,7 @@ mule-tcp-channel-connector/
 └── src/main/java/io/github/tmiya4ta/tcpchannel/
     ├── api/
     │   ├── Framing.java                    # LINE / LENGTH_PREFIX
+    │   ├── LineDelimiter.java              # LF / CRLF / NUL
     │   └── TcpChannelAttributes.java
     └── internal/
         ├── TcpChannelExtension.java
