@@ -51,6 +51,12 @@
             <version>1.11.0</version>
             <classifier>mule-plugin</classifier>
         </dependency>
+        <dependency>
+            <groupId>org.mule.modules</groupId>
+            <artifactId>mule-aggregators-module</artifactId>
+            <version>1.1.4</version>
+            <classifier>mule-plugin</classifier>
+        </dependency>
     </dependencies>
 
     <repositories>

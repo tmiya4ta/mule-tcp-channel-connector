@@ -1,4 +1,5 @@
 tcp.line.port: "5557"
 tcp.binary.port: "5558"
 tcp.fixed.port: "5559"
+tcp.agg.port: "5560"
 http.port: "8282"

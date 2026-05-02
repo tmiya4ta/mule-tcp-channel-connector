@@ -3,11 +3,13 @@
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xmlns:http="http://www.mulesoft.org/schema/mule/http"
       xmlns:tcpc="http://www.mulesoft.org/schema/mule/tcpc"
+      xmlns:aggregators="http://www.mulesoft.org/schema/mule/aggregators"
       xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
         http://www.mulesoft.org/schema/mule/tcpc http://www.mulesoft.org/schema/mule/tcpc/current/mule-tcpc.xsd
+        http://www.mulesoft.org/schema/mule/aggregators http://www.mulesoft.org/schema/mule/aggregators/current/mule-aggregators.xsd
         http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
 
     <!-- LINE framing: text/line-oriented protocol on port 5557 -->
@@ -35,6 +37,23 @@
         </tcpc:listener>
         <logger level="INFO"
                 message="[TCPC-FIX] connId=#[attributes.connectionId] msg##[attributes.messageIndex] bytes=#[sizeOf(payload)]"/>
+    </flow>
+
+    <!-- FIXED_LENGTH (8 bytes) on port 5560, batched 4-at-a-time via size-based-aggregator. -->
+    <flow name="tcp-channel-aggregated-flow">
+        <tcpc:listener config-ref="tcpc-agg-config"/>
+        <logger level="INFO"
+                message="[TCPC-AGG] frame received connId=#[attributes.connectionId] msg##[attributes.messageIndex]"/>
+        <aggregators:size-based-aggregator name="tcpc-batch" maxSize="4">
+            <aggregators:incremental-aggregation>
+                <logger level="INFO"
+                        message="[TCPC-AGG] incremental size so far... aggId=#[attributes.aggregationId]"/>
+            </aggregators:incremental-aggregation>
+            <aggregators:aggregation-complete>
+                <logger level="INFO"
+                        message="[TCPC-AGG] BATCH COMPLETE: aggId=#[attributes.aggregationId] count=#[sizeOf(payload)]"/>
+            </aggregators:aggregation-complete>
+        </aggregators:size-based-aggregator>
     </flow>
 
     <!-- Push and close target the LINE listener for the demo. -->
