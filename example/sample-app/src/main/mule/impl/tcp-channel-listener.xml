@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:tcpc="http://www.mulesoft.org/schema/mule/tcpc"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/tcpc http://www.mulesoft.org/schema/mule/tcpc/current/mule-tcpc.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- LINE framing: text/line-oriented protocol on port 5557 -->
+    <flow name="tcp-channel-line-flow">
+        <tcpc:listener config-ref="tcpc-line-config">
+            <tcpc:response>#[output text/plain --- "ACK#" ++ (attributes.messageIndex as String) ++ ": " ++ (payload as String)]</tcpc:response>
+        </tcpc:listener>
+        <logger level="INFO"
+                message="[TCPC-LINE] connId=#[attributes.connectionId] msg##[attributes.messageIndex]: '#[payload as String]'"/>
+    </flow>
+
+    <!-- LENGTH_PREFIX framing: arbitrary binary on port 5558. Echoes payload bytes back. -->
+    <flow name="tcp-channel-binary-flow">
+        <tcpc:listener config-ref="tcpc-binary-config">
+            <tcpc:response>#[payload]</tcpc:response>
+        </tcpc:listener>
+        <logger level="INFO"
+                message="[TCPC-BIN] connId=#[attributes.connectionId] msg##[attributes.messageIndex] bytes=#[sizeOf(payload)]"/>
+    </flow>
+
+    <!-- Push and close target the LINE listener for the demo. -->
+    <flow name="http-push-flow">
+        <http:listener config-ref="http-listener-config" path="/push" allowedMethods="POST"/>
+        <set-variable variableName="msg" value="#[payload]"/>
+        <tcpc:last-connection-id config-ref="tcpc-line-config" target="connId"/>
+        <logger level="INFO" message="[PUSH] connId=#[vars.connId] msg=#[vars.msg]"/>
+        <tcpc:write config-ref="tcpc-line-config" connectionId="#[vars.connId]">
+            <tcpc:data>#[vars.msg]</tcpc:data>
+        </tcpc:write>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ pushed: vars.msg as String, connectionId: vars.connId, time: now() as String }]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <flow name="http-close-flow">
+        <http:listener config-ref="http-listener-config" path="/close" allowedMethods="POST,GET"/>
+        <tcpc:last-connection-id config-ref="tcpc-line-config" target="connId"/>
+        <logger level="INFO" message="[CLOSE] connId=#[vars.connId]"/>
+        <tcpc:disconnect config-ref="tcpc-line-config" connectionId="#[vars.connId]"/>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ disconnected: vars.connId, time: now() as String }]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+</mule>

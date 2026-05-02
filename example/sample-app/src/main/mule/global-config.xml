@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:tcpc="http://www.mulesoft.org/schema/mule/tcpc"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/tcpc http://www.mulesoft.org/schema/mule/tcpc/current/mule-tcpc.xsd">
+
+    <global-property name="mule.env" value="local"/>
+    <configuration-properties file="config/config-${mule.env}.yaml"/>
+
+    <tcpc:listener-config name="tcpc-line-config">
+        <tcpc:connection host="0.0.0.0" port="${tcp.line.port}" framing="LINE"/>
+    </tcpc:listener-config>
+
+    <tcpc:listener-config name="tcpc-binary-config">
+        <tcpc:connection host="0.0.0.0" port="${tcp.binary.port}" framing="LENGTH_PREFIX"/>
+    </tcpc:listener-config>
+
+    <http:listener-config name="http-listener-config">
+        <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+    </http:listener-config>
+
+</mule>

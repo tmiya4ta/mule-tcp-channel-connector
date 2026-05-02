@@ -1,0 +1,3 @@
+tcp.line.port: "5557"
+tcp.binary.port: "5558"
+http.port: "8282"
