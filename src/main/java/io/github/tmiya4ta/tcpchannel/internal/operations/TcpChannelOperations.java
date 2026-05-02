@@ -45,7 +45,8 @@ public class TcpChannelOperations {
         }
         try {
             OutputStream out = socket.getOutputStream();
-            FrameCodec.writeFrame(out, server.getFraming(), server.getLineDelimiter(), body);
+            FrameCodec.writeFrame(out, server.getFraming(), server.getLineDelimiter(), body,
+                    server.getFixedFrameSize(), server.getMagicBytes());
             out.flush();
             LOGGER.info("[tcpc] write connId={} bytes={} framing={}",
                     connectionId, body.length, server.getFraming());

@@ -74,11 +74,13 @@ xsi:schemaLocation="
 |------------------|---------|-------------|-------------------------------------------------------------------|
 | `host`           | String  | `0.0.0.0`   | bind address                                                      |
 | `port`           | int     | (required)  | TCP port                                                          |
-| `framing`        | enum    | `LINE`      | `LINE` or `LENGTH_PREFIX` (see below)                             |
+| `framing`        | enum    | `LINE`      | `LINE`, `LENGTH_PREFIX`, or `FIXED_LENGTH` (see below)            |
 | `lineDelimiter`  | enum    | `LF`        | terminator for `LINE`: `LF`, `CRLF`, or `NUL`. Ignored otherwise. |
 | `maxFrameLength` | int     | `67108864`  | hard cap (bytes) per inbound frame; oversize frames close the conn|
 | `keepAlive`      | boolean | `true`      | sets `SO_KEEPALIVE` on every accepted socket                      |
 | `maxConnections` | int     | `200`       | concurrent connection cap; new accepts beyond it are closed       |
+| `fixedFrameSize` | int     | `0`         | required (>0) when `framing=FIXED_LENGTH`; payload size in bytes   |
+| `magicBytes`     | String  | `""`        | hex-encoded byte sequence prefixed to each FIXED_LENGTH frame; enables resync after garbage. e.g. `AABB`. |
 
 ### Source: `<tcpc:listener>`
 
@@ -130,8 +132,8 @@ String, byte[], `java.io.InputStream`, DataWeave Binary, etc.
 
 | Error                           | When                                 |
 |---------------------------------|--------------------------------------|
-| `KATCP:CONNECTION_NOT_FOUND`    | `connectionId` is not in the registry|
-| `KATCP:IO`                      | underlying socket IO failed          |
+| `TCPC:CONNECTION_NOT_FOUND`     | `connectionId` is not in the registry|
+| `TCPC:IO`                       | underlying socket IO failed          |
 
 ---
 
@@ -142,19 +144,41 @@ Both peers must agree on the same wire format. The server's framing is set on
 
 ### `LINE`
 
-Each message is terminated by `\n`. The payload delivered to the flow has the
-trailing `\n` (and an optional preceding `\r`) stripped. Outbound messages are
-auto-appended with `\n` if missing. Suitable for telnet-style or
-newline-delimited text protocols.
+Each message is terminated by the configured `lineDelimiter` (`LF`, `CRLF`,
+or `NUL`). The payload delivered to the flow does NOT include the terminator.
+For `LF` mode an optional preceding `\r` is stripped from the payload
+(CRLF-tolerant). Outbound messages have the chosen terminator auto-appended
+if missing. Suitable for telnet-style or newline-delimited text protocols.
 
 ### `LENGTH_PREFIX`
 
 Each message is a 4-byte big-endian unsigned integer length followed by exactly
 that many payload bytes. Length 0 is a valid empty message. Frame size is
-capped at 64 MiB. Suitable for arbitrary binary content (images, protobuf,
-custom packed structs).
+capped by `maxFrameLength` (default 64 MiB). Self-synchronising: even a
+malformed frame is followed by a fresh length read.
+Suitable for arbitrary binary content (images, protobuf, custom packed structs).
 
-Python encoder/decoder:
+### `FIXED_LENGTH`
+
+Each message is exactly `fixedFrameSize` bytes long. Optionally preceded by
+a `magicBytes` marker that the listener uses to **resynchronise after garbage
+bytes on the stream**. Set `magicBytes=""` to disable the marker (in which
+case any byte loss permanently corrupts framing — use only when both peers
+are tightly co-designed).
+
+The wire layout is `[magicBytes ...][payload of fixedFrameSize bytes]` per
+message, repeated. On the read path, if `magicBytes` is non-empty the listener
+discards bytes one by one until the magic prefix matches, then reads exactly
+`fixedFrameSize` payload bytes and dispatches them. On the write path
+(response and `<tcpc:write>`), the listener prepends `magicBytes` and
+**enforces** that the outgoing payload is exactly `fixedFrameSize` bytes —
+mismatches raise `TCPC:IO`.
+
+Use this for fixed-record industrial / legacy protocols (sensor packets,
+mainframe copybooks). Pick a `magicBytes` of at least 2 bytes that is
+unlikely to occur inside payloads to maximise resync reliability.
+
+Python encoder/decoder for `LENGTH_PREFIX`:
 
 ```python
 import struct
@@ -164,6 +188,17 @@ def recv_frame(sock) -> bytes:
     hdr = sock.recv(4, socket.MSG_WAITALL)
     (n,) = struct.unpack(">I", hdr)
     return sock.recv(n, socket.MSG_WAITALL)
+```
+
+Python encoder/decoder for `FIXED_LENGTH` with magic `0xAABB` and 16-byte payloads:
+
+```python
+MAGIC, SIZE = b"\xaa\xbb", 16
+def send_frame(sock, payload: bytes):
+    assert len(payload) == SIZE
+    sock.sendall(MAGIC + payload)
+def recv_frame(sock) -> bytes:
+    return sock.recv(len(MAGIC) + SIZE, socket.MSG_WAITALL)[len(MAGIC):]
 ```
 
 ---

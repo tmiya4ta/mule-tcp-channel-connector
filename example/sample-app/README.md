@@ -6,7 +6,10 @@ A Mule 4 application that demonstrates the
 * a **LINE-framed** listener on port `5557` that echoes each line back as
   `ACK#N: <line>`,
 * a **LENGTH_PREFIX**-framed listener on port `5558` that echoes each binary
-  frame straight back, and
+  frame straight back,
+* a **FIXED_LENGTH**-framed listener on port `5559` (16-byte payloads with
+  magic `0xAABB`) that echoes each fixed-size frame back, including resync
+  on garbage bytes, and
 * an HTTP listener on port `8282` exposing `/push` and `/close` to push an
   unsolicited message to (or disconnect) the most recently accepted LINE
   connection.
@@ -72,6 +75,18 @@ def recv():
     return s.recv(n)
 send(b"\xff\xd8\xff\xe0 binary frame")
 print(recv())   # echoed back as raw bytes
+```
+
+FIXED_LENGTH listener (Python). The server will resync if you inject garbage
+before the next magic prefix:
+
+```python
+import socket
+MAGIC, SIZE = b"\xaa\xbb", 16
+s = socket.create_connection(("127.0.0.1", 5559))
+s.sendall(MAGIC + b"clean-payload-01")     # echoed as MAGIC + payload
+s.sendall(b"\x01\x02\x99" + MAGIC + b"after-garbage-03")  # resync, then echo
+print(s.recv(SIZE + len(MAGIC), socket.MSG_WAITALL))
 ```
 
 ## Configuration

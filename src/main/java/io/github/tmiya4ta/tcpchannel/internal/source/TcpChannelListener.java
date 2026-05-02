@@ -150,7 +150,8 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
         try (InputStream in = new BufferedInputStream(socket.getInputStream())) {
             while (running) {
                 byte[] payload = FrameCodec.readFrame(in, server.getFraming(),
-                        server.getLineDelimiter(), server.getMaxFrameLength());
+                        server.getLineDelimiter(), server.getMaxFrameLength(),
+                        server.getFixedFrameSize(), server.getMagicBytes());
                 if (payload == null) {
                     break;
                 }
@@ -189,7 +190,8 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
         try {
             byte[] body = (response == null) ? new byte[0] : response.readAllBytes();
             OutputStream out = socket.getOutputStream();
-            FrameCodec.writeFrame(out, server.getFraming(), server.getLineDelimiter(), body);
+            FrameCodec.writeFrame(out, server.getFraming(), server.getLineDelimiter(), body,
+                    server.getFixedFrameSize(), server.getMagicBytes());
             out.flush();
         } catch (IOException e) {
             LOGGER.warn("[tcpc] onSuccess write failed connId={}: {}", connId, e.getMessage());

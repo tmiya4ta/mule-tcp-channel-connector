@@ -28,6 +28,15 @@
                 message="[TCPC-BIN] connId=#[attributes.connectionId] msg##[attributes.messageIndex] bytes=#[sizeOf(payload)]"/>
     </flow>
 
+    <!-- FIXED_LENGTH framing: 16-byte payloads with magic 0xAABB on port 5559. -->
+    <flow name="tcp-channel-fixed-flow">
+        <tcpc:listener config-ref="tcpc-fixed-config">
+            <tcpc:response>#[payload]</tcpc:response>
+        </tcpc:listener>
+        <logger level="INFO"
+                message="[TCPC-FIX] connId=#[attributes.connectionId] msg##[attributes.messageIndex] bytes=#[sizeOf(payload)]"/>
+    </flow>
+
     <!-- Push and close target the LINE listener for the demo. -->
     <flow name="http-push-flow">
         <http:listener config-ref="http-listener-config" path="/push" allowedMethods="POST"/>

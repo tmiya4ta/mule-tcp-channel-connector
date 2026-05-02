@@ -28,12 +28,15 @@ public class TcpChannelServer {
     private final int maxFrameLength;
     private final boolean keepAlive;
     private final int maxConnections;
+    private final int fixedFrameSize;
+    private final byte[] magicBytes;
 
     private final ConcurrentHashMap<String, Socket> connections = new ConcurrentHashMap<>();
     private final AtomicReference<String> lastConnectionId = new AtomicReference<>();
 
     public TcpChannelServer(String host, int port, Framing framing, LineDelimiter lineDelimiter,
-                            int maxFrameLength, boolean keepAlive, int maxConnections) throws IOException {
+                            int maxFrameLength, boolean keepAlive, int maxConnections,
+                            int fixedFrameSize, byte[] magicBytes) throws IOException {
         this.host = host;
         this.port = port;
         this.framing = framing;
@@ -41,6 +44,8 @@ public class TcpChannelServer {
         this.maxFrameLength = maxFrameLength;
         this.keepAlive = keepAlive;
         this.maxConnections = maxConnections;
+        this.fixedFrameSize = fixedFrameSize;
+        this.magicBytes = magicBytes == null ? new byte[0] : magicBytes;
         this.serverSocket = new ServerSocket();
         this.serverSocket.setReuseAddress(true);
         this.serverSocket.bind(new InetSocketAddress(host, port));
@@ -54,6 +59,8 @@ public class TcpChannelServer {
     public int getMaxFrameLength() { return maxFrameLength; }
     public boolean isKeepAlive() { return keepAlive; }
     public int getMaxConnections() { return maxConnections; }
+    public int getFixedFrameSize() { return fixedFrameSize; }
+    public byte[] getMagicBytes() { return magicBytes; }
 
     public void registerConnection(String id, Socket socket) {
         connections.put(id, socket);

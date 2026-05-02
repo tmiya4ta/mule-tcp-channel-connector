@@ -20,6 +20,11 @@
         <tcpc:connection host="0.0.0.0" port="${tcp.binary.port}" framing="LENGTH_PREFIX"/>
     </tcpc:listener-config>
 
+    <tcpc:listener-config name="tcpc-fixed-config">
+        <tcpc:connection host="0.0.0.0" port="${tcp.fixed.port}"
+                         framing="FIXED_LENGTH" fixedFrameSize="16" magicBytes="AABB"/>
+    </tcpc:listener-config>
+
     <http:listener-config name="http-listener-config">
         <http:listener-connection host="0.0.0.0" port="${http.port}"/>
     </http:listener-config>

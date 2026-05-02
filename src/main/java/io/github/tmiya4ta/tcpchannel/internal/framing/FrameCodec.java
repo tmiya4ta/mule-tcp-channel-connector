@@ -31,20 +31,24 @@ public final class FrameCodec {
     private FrameCodec() {}
 
     public static byte[] readFrame(InputStream in, Framing framing,
-                                   LineDelimiter lineDelimiter, int maxFrameLength)
+                                   LineDelimiter lineDelimiter, int maxFrameLength,
+                                   int fixedFrameSize, byte[] magicBytes)
             throws IOException {
         switch (framing) {
             case LINE:
                 return readLine(in, lineDelimiter, maxFrameLength);
             case LENGTH_PREFIX:
                 return readLengthPrefixed(in, maxFrameLength);
+            case FIXED_LENGTH:
+                return readFixed(in, fixedFrameSize, magicBytes);
             default:
                 throw new IllegalStateException("Unknown framing: " + framing);
         }
     }
 
     public static void writeFrame(OutputStream out, Framing framing,
-                                  LineDelimiter lineDelimiter, byte[] payload) throws IOException {
+                                  LineDelimiter lineDelimiter, byte[] payload,
+                                  int fixedFrameSize, byte[] magicBytes) throws IOException {
         switch (framing) {
             case LINE:
                 writeLine(out, lineDelimiter, payload);
@@ -52,6 +56,9 @@ public final class FrameCodec {
             case LENGTH_PREFIX:
                 writeIntBE(out, payload.length);
                 out.write(payload);
+                return;
+            case FIXED_LENGTH:
+                writeFixed(out, fixedFrameSize, magicBytes, payload);
                 return;
             default:
                 throw new IllegalStateException("Unknown framing: " + framing);
@@ -145,6 +152,66 @@ public final class FrameCodec {
                 }
                 return;
         }
+    }
+
+    /**
+     * Reads exactly {@code size} bytes after locating the magic byte sequence.
+     * If {@code magic} is empty, reads {@code size} bytes immediately.
+     * Otherwise, scans forward one byte at a time, discarding non-matching
+     * bytes (resync-on-garbage), until the magic prefix is found, then reads
+     * the payload. Returns null only if EOF is hit before any magic byte (clean
+     * shutdown). Mid-frame EOF raises {@link IOException}.
+     */
+    private static byte[] readFixed(InputStream in, int size, byte[] magic) throws IOException {
+        if (size <= 0) {
+            throw new IOException("FIXED_LENGTH framing requires a positive fixedFrameSize");
+        }
+        if (magic.length == 0) {
+            byte[] payload = new byte[size];
+            int read = in.readNBytes(payload, 0, size);
+            if (read == 0) return null;
+            if (read != size) {
+                throw new IOException("EOF mid-frame: expected " + size + " bytes, got " + read);
+            }
+            return payload;
+        }
+        int matched = 0;
+        boolean sawAnyByte = false;
+        while (matched < magic.length) {
+            int b = in.read();
+            if (b == -1) {
+                if (!sawAnyByte && matched == 0) return null;
+                throw new IOException("EOF while searching for magicBytes (matched " + matched + "/" + magic.length + ")");
+            }
+            sawAnyByte = true;
+            if (b == (magic[matched] & 0xff)) {
+                matched++;
+            } else if (b == (magic[0] & 0xff)) {
+                matched = 1;
+            } else {
+                matched = 0;
+            }
+        }
+        byte[] payload = new byte[size];
+        int read = in.readNBytes(payload, 0, size);
+        if (read != size) {
+            throw new IOException("EOF mid-frame: expected " + size + " bytes after magic, got " + read);
+        }
+        return payload;
+    }
+
+    private static void writeFixed(OutputStream out, int size, byte[] magic, byte[] payload) throws IOException {
+        if (size <= 0) {
+            throw new IOException("FIXED_LENGTH framing requires a positive fixedFrameSize");
+        }
+        if (payload.length != size) {
+            throw new IOException("FIXED_LENGTH payload size mismatch: expected " + size
+                    + " bytes, got " + payload.length);
+        }
+        if (magic.length > 0) {
+            out.write(magic);
+        }
+        out.write(payload);
     }
 
     private static byte[] readLengthPrefixed(InputStream in, int maxLen) throws IOException {

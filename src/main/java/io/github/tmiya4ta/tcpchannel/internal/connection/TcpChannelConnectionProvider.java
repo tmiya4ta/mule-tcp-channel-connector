@@ -53,14 +53,56 @@ public class TcpChannelConnectionProvider implements CachedConnectionProvider<Tc
     @Summary("Maximum number of concurrent client connections. New accepts beyond this are immediately closed.")
     private int maxConnections;
 
+    @Parameter
+    @Optional(defaultValue = "0")
+    @Placement(order = 8)
+    @Summary("Payload size in bytes for FIXED_LENGTH framing. Required when framing=FIXED_LENGTH; ignored otherwise.")
+    private int fixedFrameSize;
+
+    @Parameter
+    @Optional(defaultValue = "")
+    @Placement(order = 9)
+    @Summary("Hex-encoded magic byte sequence prepended to every FIXED_LENGTH frame and used to resynchronise after garbage. Empty disables magic. Example: 'AABB'.")
+    private String magicBytes;
+
     @Override
     public TcpChannelServer connect() throws ConnectionException {
+        byte[] magic = parseHex(magicBytes);
+        if (framing == Framing.FIXED_LENGTH) {
+            if (fixedFrameSize <= 0) {
+                throw new ConnectionException(
+                        "framing=FIXED_LENGTH requires a positive fixedFrameSize");
+            }
+            if (fixedFrameSize > maxFrameLength) {
+                throw new ConnectionException(
+                        "fixedFrameSize (" + fixedFrameSize + ") exceeds maxFrameLength (" + maxFrameLength + ")");
+            }
+        }
         try {
             return new TcpChannelServer(host, port, framing, lineDelimiter,
-                    maxFrameLength, keepAlive, maxConnections);
+                    maxFrameLength, keepAlive, maxConnections,
+                    fixedFrameSize, magic);
         } catch (IOException e) {
             throw new ConnectionException("Failed to bind TCP server on " + host + ":" + port, e);
         }
+    }
+
+    private static byte[] parseHex(String hex) throws ConnectionException {
+        if (hex == null || hex.isEmpty()) return new byte[0];
+        String s = hex.replace(" ", "").replace(":", "");
+        if (s.length() % 2 != 0) {
+            throw new ConnectionException("magicBytes must have an even number of hex digits: '" + hex + "'");
+        }
+        byte[] out = new byte[s.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            int hi = Character.digit(s.charAt(i * 2), 16);
+            int lo = Character.digit(s.charAt(i * 2 + 1), 16);
+            if (hi < 0 || lo < 0) {
+                throw new ConnectionException("magicBytes contains a non-hex character: '" + hex + "'");
+            }
+            out[i] = (byte) ((hi << 4) | lo);
+        }
+        return out;
     }
 
     @Override
