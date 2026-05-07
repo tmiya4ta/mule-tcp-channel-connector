@@ -25,7 +25,8 @@ cp target/tcp-channel-sample-app-1.0.0-mule-application.jar \
    $MULE_HOME/apps/
 ```
 
-Make sure the connector is in your local Maven repo first:
+Make sure the connector is in your local Maven repo first (the sample-app
+depends on **`mule-tcp-channel-connector:2.0.0`**):
 
 ```bash
 cd ../..

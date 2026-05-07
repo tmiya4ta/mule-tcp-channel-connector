@@ -1,5 +1,6 @@
 package io.github.tmiya4ta.tcpchannel.internal.operations;
 
+import io.github.tmiya4ta.tcpchannel.internal.connection.ConnectionEntry;
 import io.github.tmiya4ta.tcpchannel.internal.connection.TcpChannelServer;
 import io.github.tmiya4ta.tcpchannel.internal.framing.FrameCodec;
 import org.mule.runtime.extension.api.annotation.param.Connection;
@@ -23,20 +24,25 @@ public class TcpChannelOperations {
     /**
      * Writes a single framed message to the live socket identified by connectionId,
      * WITHOUT closing it. The framing is taken from the listener-config that owns
-     * the connection (LINE or LENGTH_PREFIX).
+     * the connection.
      *
      * <p>The {@code data} parameter accepts any content the Mule transformer can
      * coerce to {@link InputStream} — String, byte[], InputStream, DataWeave
      * Binary, etc.
+     *
+     * <p>On IO failure the connection is closed and unregistered via the shared
+     * {@code closeAndUnregister} path so subsequent operations and the source's
+     * read loop see a consistent registry state.
      */
     public void write(@Connection TcpChannelServer server,
                       String connectionId,
                       @Content InputStream data) {
-        Socket socket = server.getConnection(connectionId);
-        if (socket == null || socket.isClosed()) {
+        ConnectionEntry entry = server.getEntry(connectionId);
+        if (entry == null || entry.socket().isClosed()) {
             throw new ModuleException("No live connection for id: " + connectionId,
                     TcpChannelErrors.CONNECTION_NOT_FOUND);
         }
+        Socket socket = entry.socket();
         byte[] body;
         try {
             body = (data == null) ? new byte[0] : data.readAllBytes();
@@ -48,31 +54,31 @@ public class TcpChannelOperations {
             FrameCodec.writeFrame(out, server.getFraming(), server.getLineDelimiter(), body,
                     server.getFixedFrameSize(), server.getMagicBytes());
             out.flush();
+            entry.touch();
+            server.getMetrics().incFramesSent(body.length);
             LOGGER.info("[tcpc] write connId={} bytes={} framing={}",
                     connectionId, body.length, server.getFraming());
         } catch (IOException e) {
             LOGGER.warn("[tcpc] write failed connId={}: {}", connectionId, e.getMessage());
+            server.getMetrics().incWriteError();
+            server.closeAndUnregister(connectionId);
             throw new ModuleException("Write failed for connection " + connectionId,
                     TcpChannelErrors.IO, e);
         }
     }
 
     /**
-     * Closes the socket identified by connectionId.
+     * Closes the socket identified by connectionId. Idempotent — closing an
+     * already-removed id is a no-op WARNing.
      */
     public void disconnect(@Connection TcpChannelServer server,
                            String connectionId) {
-        Socket socket = server.unregisterConnection(connectionId);
-        if (socket == null) {
+        if (server.getConnection(connectionId) == null) {
             LOGGER.warn("[tcpc] disconnect: no live connection for id={}", connectionId);
             return;
         }
-        try {
-            socket.close();
-            LOGGER.info("[tcpc] disconnect connId={} ok", connectionId);
-        } catch (IOException e) {
-            LOGGER.warn("[tcpc] disconnect connId={} error: {}", connectionId, e.getMessage());
-        }
+        server.closeAndUnregister(connectionId);
+        LOGGER.info("[tcpc] disconnect connId={} ok", connectionId);
     }
 
     /**
