@@ -6,7 +6,7 @@
 
     <groupId>io.github.tmiya4ta</groupId>
     <artifactId>tcp-channel-sample-app</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <packaging>mule-application</packaging>
 
     <name>tcp-channel-sample-app</name>

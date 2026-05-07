@@ -280,9 +280,10 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
             LOGGER.warn("[tcpc] onSuccess: socket already closed for connId={}", connId);
             return;
         }
+        long seq = ctx.<Long>getVariable("messageIndex").orElse(0L);
         try {
             byte[] body = (response == null) ? new byte[0] : response.readAllBytes();
-            entry.writeFrame(server.getFraming(), server.getLineDelimiter(),
+            entry.writeOrderedFrame(seq, server.getFraming(), server.getLineDelimiter(),
                     server.getFixedFrameSize(), server.getMagicBytes(), body);
             server.getMetrics().incFramesSent(body.length);
         } catch (IOException e) {
