@@ -222,8 +222,42 @@ $ printf 'hello\n' | nc 127.0.0.1 5557
 ACK: hello
 ```
 
-For a multi-port (LINE + LENGTH_PREFIX) sample app with HTTP-driven `push`
-and `disconnect` flows, see [`example/sample-app`](example/sample-app/).
+For a multi-port (LINE + LENGTH_PREFIX + FIXED_LENGTH + aggregator) sample app
+with HTTP-driven `push` and `disconnect` flows, see
+[`example/sample-app`](example/sample-app/).
+
+![Sample app flows in Anypoint Studio](docs/sample-app-flows.png)
+
+### Sample app build
+
+Build the connector first so it lands in your local Maven repo, then build
+the sample app:
+
+```bash
+# 1. Connector → ~/.m2/repository
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 mvn clean install
+
+# 2. Sample app
+cd example/sample-app
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+  mvn clean package -DskipTests -DattachMuleSources
+
+# 3. Drop into a Mule standalone runtime
+cp target/tcp-channel-sample-app-1.0.0-mule-application.jar $MULE_HOME/apps/
+```
+
+The sample exposes:
+
+| Port  | Framing       | Flow                          |
+|-------|---------------|-------------------------------|
+| 5557  | LINE          | `tcp-channel-line-flow` — echoes `ACK#N: <line>` |
+| 5558  | LENGTH_PREFIX | `tcp-channel-binary-flow` — binary echo |
+| 5559  | FIXED_LENGTH  | `tcp-channel-fixed-flow` — 16-byte payloads, magic `0xAABB` |
+| 5560  | LINE          | `tcp-channel-aggregated-flow` — size-based aggregator demo |
+| 8282  | HTTP          | `/push`, `/close` against the latest LINE client |
+
+See [`example/sample-app/README.md`](example/sample-app/README.md) for client
+snippets and configuration overrides.
 
 ---
 
