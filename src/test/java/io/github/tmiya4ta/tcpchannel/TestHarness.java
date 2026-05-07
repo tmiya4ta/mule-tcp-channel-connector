@@ -105,6 +105,14 @@ final class TestHarness implements AutoCloseable {
             server.getMetrics().incAccepted();
             workers.submit(() -> {
                 try {
+                    if (socket instanceof javax.net.ssl.SSLSocket) {
+                        try {
+                            ((javax.net.ssl.SSLSocket) socket).startHandshake();
+                        } catch (IOException e) {
+                            server.closeAndUnregister(connId);
+                            return;
+                        }
+                    }
                     readLoop(connId, socket);
                 } finally {
                     permits.release();
@@ -130,6 +138,17 @@ final class TestHarness implements AutoCloseable {
                 if (entry != null) entry.touch();
                 server.getMetrics().incFramesReceived(payload.length);
                 received.offer(payload);
+                if (echoMode && entry != null) {
+                    try {
+                        entry.writeFrame(server.getFraming(), server.getLineDelimiter(),
+                                server.getFixedFrameSize(), server.getMagicBytes(), payload);
+                        server.getMetrics().incFramesSent(payload.length);
+                    } catch (IOException e) {
+                        server.getMetrics().incWriteError();
+                        server.closeAndUnregister(connId);
+                        return;
+                    }
+                }
             }
         } catch (IOException e) {
             if (running) server.getMetrics().incReadError();
@@ -137,6 +156,9 @@ final class TestHarness implements AutoCloseable {
             server.closeAndUnregister(connId);
         }
     }
+
+    private boolean echoMode;
+    void enableEcho() { this.echoMode = true; }
 
     @Override
     public void close() {

@@ -2,7 +2,6 @@ package io.github.tmiya4ta.tcpchannel.internal.operations;
 
 import io.github.tmiya4ta.tcpchannel.internal.connection.ConnectionEntry;
 import io.github.tmiya4ta.tcpchannel.internal.connection.TcpChannelServer;
-import io.github.tmiya4ta.tcpchannel.internal.framing.FrameCodec;
 import org.mule.runtime.extension.api.annotation.param.Connection;
 import org.mule.runtime.extension.api.annotation.param.Content;
 import org.mule.runtime.extension.api.annotation.param.MediaType;
@@ -12,8 +11,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.Socket;
 
 import static org.mule.runtime.extension.api.annotation.param.MediaType.TEXT_PLAIN;
 
@@ -42,7 +39,6 @@ public class TcpChannelOperations {
             throw new ModuleException("No live connection for id: " + connectionId,
                     TcpChannelErrors.CONNECTION_NOT_FOUND);
         }
-        Socket socket = entry.socket();
         byte[] body;
         try {
             body = (data == null) ? new byte[0] : data.readAllBytes();
@@ -50,11 +46,8 @@ public class TcpChannelOperations {
             throw new ModuleException("Failed to read input data", TcpChannelErrors.IO, e);
         }
         try {
-            OutputStream out = socket.getOutputStream();
-            FrameCodec.writeFrame(out, server.getFraming(), server.getLineDelimiter(), body,
-                    server.getFixedFrameSize(), server.getMagicBytes());
-            out.flush();
-            entry.touch();
+            entry.writeFrame(server.getFraming(), server.getLineDelimiter(),
+                    server.getFixedFrameSize(), server.getMagicBytes(), body);
             server.getMetrics().incFramesSent(body.length);
             LOGGER.info("[tcpc] write connId={} bytes={} framing={}",
                     connectionId, body.length, server.getFraming());

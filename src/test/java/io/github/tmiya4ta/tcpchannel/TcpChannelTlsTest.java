@@ -13,6 +13,8 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
 import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
@@ -56,6 +58,83 @@ class TcpChannelTlsTest {
                 assertNotNull(received, "TLS frame should have been decoded");
                 assertArrayEquals("encrypted-hello".getBytes(), received);
             }
+        }
+    }
+
+    @Test
+    @DisplayName("Plain client connecting to TLS port: handshake fails, server stays up")
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void plainClientToTlsPortFailsHandshakeButLeavesServerAlive() throws Exception {
+        SSLContext serverCtx = serverContext();
+        TestHarness.Builder b = new TestHarness.Builder();
+        b.tls(() -> {
+            try {
+                return (SSLServerSocket) serverCtx.getServerSocketFactory().createServerSocket();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        try (TestHarness h = TestHarness.start(b)) {
+            // Plain TCP client speaking nonsense to a TLS port.
+            try (Socket plain = new Socket("127.0.0.1", h.port())) {
+                OutputStream out = plain.getOutputStream();
+                out.write("not-a-tls-handshake\r\n".getBytes());
+                out.flush();
+            } catch (IOException ignored) {
+            }
+
+            // After the rogue connection, a legitimate TLS client should still
+            // be able to handshake and exchange a frame.
+            SSLContext clientCtx = trustAllContext();
+            try (SSLSocket good = (SSLSocket) clientCtx.getSocketFactory()
+                    .createSocket("127.0.0.1", h.port())) {
+                good.startHandshake();
+                good.getOutputStream().write("after-bogus\n".getBytes());
+                good.getOutputStream().flush();
+                byte[] received = h.received.poll(3, TimeUnit.SECONDS);
+                assertNotNull(received, "good client must succeed after rogue");
+                assertArrayEquals("after-bogus".getBytes(), received);
+            }
+
+            // Settle and verify the rogue did not leak a registry entry.
+            long deadline = System.currentTimeMillis() + 2_000;
+            while (h.server.activeConnectionCount() > 0
+                    && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50);
+            }
+            assertEquals(0, h.server.activeConnectionCount());
+        }
+    }
+
+    @Test
+    @DisplayName("Truncated TLS handshake (1 byte then close) does not hang the server")
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void truncatedHandshakeRecovers() throws Exception {
+        SSLContext serverCtx = serverContext();
+        TestHarness.Builder b = new TestHarness.Builder();
+        b.tls(() -> {
+            try {
+                return (SSLServerSocket) serverCtx.getServerSocketFactory().createServerSocket();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        try (TestHarness h = TestHarness.start(b)) {
+            for (int i = 0; i < 10; i++) {
+                try (Socket plain = new Socket("127.0.0.1", h.port())) {
+                    plain.getOutputStream().write(0x16); // ClientHello record type byte
+                    plain.getOutputStream().flush();
+                } catch (IOException ignored) {
+                }
+            }
+            // The server's accept-side handshakes must all fail and clean up.
+            long deadline = System.currentTimeMillis() + 3_000;
+            while (h.server.activeConnectionCount() > 0
+                    && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50);
+            }
+            assertEquals(0, h.server.activeConnectionCount(),
+                    "truncated-handshake clients must be cleaned up");
         }
     }
 

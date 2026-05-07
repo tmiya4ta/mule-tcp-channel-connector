@@ -23,12 +23,10 @@ import org.mule.sdk.api.annotation.source.EmitsResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -282,14 +280,10 @@ public class TcpChannelListener extends Source<byte[], TcpChannelAttributes> {
             LOGGER.warn("[tcpc] onSuccess: socket already closed for connId={}", connId);
             return;
         }
-        Socket socket = entry.socket();
         try {
             byte[] body = (response == null) ? new byte[0] : response.readAllBytes();
-            OutputStream out = socket.getOutputStream();
-            FrameCodec.writeFrame(out, server.getFraming(), server.getLineDelimiter(), body,
-                    server.getFixedFrameSize(), server.getMagicBytes());
-            out.flush();
-            entry.touch();
+            entry.writeFrame(server.getFraming(), server.getLineDelimiter(),
+                    server.getFixedFrameSize(), server.getMagicBytes(), body);
             server.getMetrics().incFramesSent(body.length);
         } catch (IOException e) {
             LOGGER.warn("[tcpc] onSuccess write failed connId={}: {}", connId, e.getMessage());

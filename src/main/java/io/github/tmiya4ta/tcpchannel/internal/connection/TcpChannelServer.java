@@ -119,16 +119,19 @@ public class TcpChannelServer {
     }
 
     public Socket unregisterConnection(String id) {
+        if (id == null) return null;
         ConnectionEntry e = connections.remove(id);
         return e == null ? null : e.socket();
     }
 
     public Socket getConnection(String id) {
+        if (id == null) return null;
         ConnectionEntry e = connections.get(id);
         return e == null ? null : e.socket();
     }
 
     public ConnectionEntry getEntry(String id) {
+        if (id == null) return null;
         return connections.get(id);
     }
 
@@ -147,6 +150,7 @@ public class TcpChannelServer {
      * {@code <tcpc:disconnect>} converge here.
      */
     public void closeAndUnregister(String id) {
+        if (id == null) return;
         ConnectionEntry e = connections.remove(id);
         if (e == null) return;
         try {
